@@ -88,6 +88,7 @@ class MutableStream:
             (bytes) Data read from device
         """
         frames = deque()
+        LOG.info('got frames')
         remaining = size
         with self.read_lock:
             while remaining > 0:
@@ -98,15 +99,18 @@ class MutableStream:
 
                 to_read = min(self.wrapped_stream.get_read_available(),
                               remaining)
+                LOG.info('bytes to read: ' + str(to_read))
                 if to_read <= 0:
                     sleep(.01)
                     continue
                 result = self.wrapped_stream.read(to_read,
                                                   exception_on_overflow=of_exc)
+                LOG.info('microphone stream read complete')
                 frames.append(result)
                 remaining -= to_read
 
         input_latency = self.wrapped_stream.get_input_latency()
+        LOG.info('input latency: ' + str(input_latency))
         if input_latency > 0.2:
             LOG.warning("High input latency: %f" % input_latency)
         audio = b"".join(list(frames))
@@ -594,6 +598,7 @@ class ResponsiveRecognizer(speech_recognition.Recognizer):
         # The maximum audio in seconds to keep for transcribing a phrase
         # The wake word must fit in this time
         ww_duration = self.wake_word_recognizer.expected_duration
+        LOG.info('wake word duration: ' + str(ww_duration))
         ww_test_duration = max(3, ww_duration)
 
         mic_write_counter = 0
@@ -604,10 +609,14 @@ class ResponsiveRecognizer(speech_recognition.Recognizer):
 
         # Max bytes for byte_data before audio is removed from the front
         max_size = source.duration_to_bytes(ww_duration)
+        LOG.info('max_size: ' + str(max_size))
         test_size = source.duration_to_bytes(ww_test_duration)
+        LOG.info('test_size: ' + str(test_size))
         audio_buffer = CyclicAudioBuffer(max_size, silence)
+        LOG.info('CyclicAudioBuffer instantiated')
 
         buffers_per_check = self.SEC_BETWEEN_WW_CHECKS / sec_per_buffer
+        LOG.info(buffers_per_check)
         buffers_since_check = 0.0
 
         # Rolling buffer to track the audio energy (loudness) heard on
@@ -615,19 +624,24 @@ class ResponsiveRecognizer(speech_recognition.Recognizer):
         # based on these levels.
         average_samples = int(5 / sec_per_buffer)  # average over last 5 secs
         audio_mean = RollingMean(average_samples)
+        LOG.info('instantiated RollingMean')
 
         # These are frames immediately after wake word is detected
         # that we want to keep to send to STT
         ww_frames = deque(maxlen=7)
+        LOG.info('deque into wake word frames complete')
 
         said_wake_word = False
         audio_data = None
+        LOG.info('Entering wake word listening loop')
         while (not said_wake_word and not self._stop_signaled and
                not self._skip_wake_word()):
             chunk = self.record_sound_chunk(source)
+            LOG.info('got a recorded chunk')
             audio_buffer.append(chunk)
             ww_frames.append(chunk)
 
+            LOG.info('calculating mic energy levels')
             energy = self.calc_energy(chunk, source.SAMPLE_WIDTH)
             audio_mean.append_sample(energy)
 
@@ -641,6 +655,7 @@ class ResponsiveRecognizer(speech_recognition.Recognizer):
             # Periodically output energy level stats. This can be used to
             # visualize the microphone input, e.g. a needle on a meter.
             if mic_write_counter % 3:
+                LOG.info('writing energy levels to file')
                 self._watchdog()
                 self.write_mic_level(energy, source)
             mic_write_counter += 1
@@ -648,12 +663,14 @@ class ResponsiveRecognizer(speech_recognition.Recognizer):
             buffers_since_check += 1.0
             # Send chunk to wake_word_recognizer
             self.wake_word_recognizer.update(chunk)
+            LOG.info('updated wake word recognizer with audio chunk')
 
             if buffers_since_check > buffers_per_check:
                 buffers_since_check -= buffers_per_check
                 audio_data = audio_buffer.get_last(test_size) + silence
                 said_wake_word = \
                     self.wake_word_recognizer.found_wake_word(audio_data)
+                LOG.info('said_wake_word: ' + str(said_wake_word))
 
         self._listen_triggered = False
         return WakeWordData(audio_data, said_wake_word,
@@ -708,7 +725,7 @@ class ResponsiveRecognizer(speech_recognition.Recognizer):
         #       speech is detected, but there is no code to actually do that.
         self.adjust_for_ambient_noise(source, 1.0)
 
-        LOG.debug("Waiting for wake word...")
+        LOG.info("Waiting for wake word...")
         ww_data = self._wait_until_wake_word(source, sec_per_buffer)
 
         ww_frames = None
